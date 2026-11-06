@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>3 Things</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -13,8 +13,8 @@
 <link rel="icon" type="image/png" href="icon-512.png">
 <link rel="manifest" href="manifest.json">
 <style>
-  /* Drop your licensed Neue Haas Grotesk Display 65 Medium file next to this page
-     with this exact name and it will be used automatically. */
+  /* Put your licensed Neue Haas Grotesk Display 65 Medium next to this page
+     under this exact name and it is used automatically. */
   @font-face {
     font-family: "NHG";
     src: url("NeueHaasDisplay-Medium.woff2") format("woff2");
@@ -30,23 +30,19 @@
     font-weight: 600;
     font-size: 20px;
     line-height: 1.2;
-    text-transform: uppercase;
     -webkit-font-smoothing: antialiased;
     -webkit-tap-highlight-color: transparent;
-    -webkit-user-select: none;
-    user-select: none;
-    overscroll-behavior: none;
   }
-  button, input { font: inherit; color: inherit; text-transform: uppercase; background: none; border: none; outline: none; }
-  button { cursor: pointer; text-align: left; padding: 0; }
-  input { width: 100%; padding: 0; -webkit-user-select: text; user-select: text; border-radius: 0; }
-  input::placeholder { color: var(--ink); opacity: 1; }
+  .caps { text-transform: uppercase; }
+  button { font: inherit; color: inherit; background: none; border: none; padding: 0; text-align: left; cursor: pointer; text-transform: uppercase; }
+  input {
+    font: inherit; color: inherit; background: none; border: none; outline: none; padding: 0;
+    width: 100%; border-radius: 0; caret-color: var(--ink);
+    border-bottom: 2px solid var(--ink);
+  }
   .app {
-    height: 100dvh;
-    max-width: 480px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
+    height: 100dvh; max-width: 480px; margin: 0 auto;
+    display: flex; flex-direction: column;
     padding: calc(env(safe-area-inset-top) + 24px) 24px calc(env(safe-area-inset-bottom) + 24px);
   }
   .bar { display: flex; justify-content: space-between; align-items: baseline; flex-shrink: 0; }
@@ -56,13 +52,17 @@
   main.list { padding: 40px 0; gap: 22px; }
   .row { display: flex; gap: 18px; align-items: baseline; }
   .n { flex-shrink: 0; min-width: 14px; }
-  .task { flex-grow: 1; touch-action: pan-y; cursor: grab; transition: transform .18s ease; will-change: transform; }
+  .grow { flex-grow: 1; }
+  .task { flex-grow: 1; touch-action: pan-y; cursor: grab; transition: transform .18s ease; -webkit-user-select: none; user-select: none; text-transform: uppercase; }
   .task.dragging { transition: none; }
   .done { text-decoration: line-through; text-decoration-thickness: 2px; }
-  .group { display: flex; flex-direction: column; gap: 14px; }
   .groups { display: flex; flex-direction: column; gap: 36px; }
+  .group { display: flex; flex-direction: column; gap: 14px; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; text-transform: uppercase; }
+  .plus { min-width: 44px; text-align: right; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-left: 32px; }
   .pop { animation: pop .25s ease; }
-  @keyframes pop { 0% { transform: scale(1); } 45% { transform: scale(1.12); } 100% { transform: scale(1); } }
+  @keyframes pop { 45% { transform: scale(1.12); } }
 </style>
 </head>
 <body>
@@ -83,30 +83,30 @@
   var KEY = '3things.v1';
   var main = document.getElementById('main');
   var S;
+  // What is being typed right now: null, {kind:'today'}, {kind:'task', cat}, {kind:'cat'}
+  var editing = null;
+  var pickedCat = '';
+  var bump = false;
 
-  function dayKey() {
-    var d = new Date();
-    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
-  }
-
+  function dayKey() { var d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
   function load() {
     try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
-    if (!S || !S.tasks) S = { tasks: [], history: [], points: 0, day: dayKey(), tab: 'today', more: false };
+    if (!S || !S.tasks) S = { tasks: [], history: [], points: 0, day: dayKey(), tab: 'today' };
+    if (!S.cats) {
+      S.cats = [];
+      S.tasks.forEach(function (t) { if (t.cat && S.cats.indexOf(t.cat) < 0) S.cats.push(t.cat); });
+    }
   }
-  function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
-  }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 
-  // End of day: finished tasks go to Done, unfinished go back to All.
+  // End of day: finished -> Done, unfinished -> back to All.
   function rollover() {
     if (S.day === dayKey()) return false;
-    var finished = S.tasks.filter(function (t) { return t.where === 'today' && t.done; });
-    S.history = finished.map(function (t) { return t.text; }).reverse().concat(S.history);
-    S.tasks = S.tasks
-      .filter(function (t) { return !(t.where === 'today' && t.done); })
+    var fin = S.tasks.filter(function (t) { return t.where === 'today' && t.done; });
+    S.history = fin.map(function (t) { return t.text; }).reverse().concat(S.history);
+    S.tasks = S.tasks.filter(function (t) { return !(t.where === 'today' && t.done); })
       .map(function (t) { if (t.where === 'today') { t.where = 'all'; t.done = false; } return t; });
     S.day = dayKey();
-    S.more = false;
     save();
     return true;
   }
@@ -116,35 +116,18 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
-  function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : ''; }
-
-  function parse(raw) {
-    raw = (raw || '').trim();
-    var k = raw.indexOf(':');
-    var cat = k > 0 ? raw.slice(0, k).trim() : '';
-    var text = (k > 0 ? raw.slice(k + 1) : raw).trim();
-    return { cat: cap(cat), text: text };
-  }
-  function add(where, raw) {
-    var p = parse(raw);
-    if (!p.text) return false;
-    S.tasks.push({ id: Date.now() + Math.random(), text: p.text, cat: p.cat, where: where, done: false });
-    return true;
-  }
-  function find(id) {
-    for (var i = 0; i < S.tasks.length; i++) if (String(S.tasks[i].id) === String(id)) return S.tasks[i];
-    return null;
-  }
+  function find(id) { for (var i = 0; i < S.tasks.length; i++) if (String(S.tasks[i].id) === String(id)) return S.tasks[i]; return null; }
   function todays() { return S.tasks.filter(function (t) { return t.where === 'today'; }); }
+  function newTask(text, cat, where) { S.tasks.push({ id: Date.now() + '' + Math.floor(Math.random() * 1000), text: text, cat: cat, where: where, done: false }); }
 
-  var bump = false;
+  var INPUT = '<input id="field" type="text" autocapitalize="characters" autocomplete="off" spellcheck="true" enterkeyhint="done">';
 
-  function render(focusId) {
+  function render() {
     var today = todays();
     var doneCount = today.filter(function (t) { return t.done; }).length;
-
-    document.getElementById('tabToday').textContent = 'Today ' + doneCount + '/3';
-    document.getElementById('tabToday').className = S.tab === 'today' ? 'on' : '';
+    var tt = document.getElementById('tabToday');
+    tt.textContent = 'Today ' + doneCount + '/3';
+    tt.className = S.tab === 'today' ? 'on' : '';
     document.getElementById('tabAll').className = S.tab === 'all' ? 'on' : '';
     document.getElementById('tabDone').className = S.tab === 'done' ? 'on' : '';
     var pts = document.getElementById('points');
@@ -155,113 +138,163 @@
     if (S.tab === 'today') {
       main.className = 'today';
       today.forEach(function (t, i) {
-        h += '<div class="row"><span class="n">' + (i + 1) + '</span>' +
-             '<span class="task' + (t.done ? ' done' : '') + '" data-id="' + t.id + '">' +
-             esc(t.text) + (t.cat ? ' / ' + esc(t.cat) : '') + '</span></div>';
+        h += '<div class="row"><span class="n">' + (i + 1) + '</span><span class="task' + (t.done ? ' done' : '') +
+             '" data-id="' + t.id + '">' + esc(t.text) + (t.cat ? ' / ' + esc(t.cat) : '') + '</span></div>';
       });
-      var rows = today.length;
-      if (today.length < 3 || S.more) {
-        rows++;
-        h += '<div class="row"><span class="n">' + rows + '</span>' +
-             '<input id="addToday" placeholder="+" enterkeyhint="done" autocomplete="off" autocorrect="off"></div>';
+      var n = today.length;
+      var typing = editing && editing.kind === 'today';
+      if (typing) {
+        n++;
+        h += '<div class="row"><span class="n">' + n + '</span><span class="grow">' + INPUT + '</span></div>';
+        if (S.cats.length) {
+          h += '<div class="chips">';
+          S.cats.forEach(function (c) {
+            h += '<button class="chip' + (pickedCat === c ? ' on' : '') + '" data-chip="' + esc(c) + '">' + esc(c) + '</button>';
+          });
+          h += '</div>';
+        }
+      } else if (today.length < 3) {
+        n++;
+        h += '<div class="row"><span class="n">' + n + '</span><button class="grow" data-add="today">+</button></div>';
       }
-      while (rows < 3) { rows++; h += '<div class="row"><span class="n">' + rows + '</span><span>—</span></div>'; }
-      if (today.length >= 3 && !S.more) h += '<button id="more">...</button>';
+      while (n < 3) { n++; h += '<div class="row"><span class="n">' + n + '</span><span>—</span></div>'; }
+      if (!typing && today.length >= 3) h += '<button data-add="today">...</button>';
     } else if (S.tab === 'all') {
       main.className = 'list';
-      var cats = [];
-      S.tasks.forEach(function (t) {
-        var c = t.cat || 'Inbox';
-        if (t.where === 'all' && cats.indexOf(c) < 0) cats.push(c);
-      });
       h += '<div class="groups">';
+      var cats = S.cats.slice();
+      if (S.tasks.some(function (t) { return t.where === 'all' && !t.cat; })) cats.push('');
       cats.forEach(function (c) {
-        h += '<div class="group"><div>' + esc(c) + ':</div>';
-        S.tasks.forEach(function (t) {
-          if (t.where === 'all' && (t.cat || 'Inbox') === c)
-            h += '<div class="task" data-id="' + t.id + '">' + esc(t.text) + '</div>';
-        });
+        var items = S.tasks.filter(function (t) { return t.where === 'all' && (t.cat || '') === c; });
+        h += '<div class="group"><div class="head" data-cat="' + esc(c) + '"><span>' + (c ? esc(c) : 'Other') + ':</span>' +
+             '<button class="plus" data-add="task" data-for="' + esc(c) + '">+</button></div>';
+        items.forEach(function (t) { h += '<div class="task" data-id="' + t.id + '">' + esc(t.text) + '</div>'; });
+        if (editing && editing.kind === 'task' && editing.cat === c) h += INPUT;
         h += '</div>';
       });
-      h += '<input id="addAll" placeholder="+ Home: buy bulbs" enterkeyhint="done" autocomplete="off" autocorrect="off"></div>';
+      if (editing && editing.kind === 'cat') h += '<div class="group">' + INPUT + '</div>';
+      else h += '<button data-add="cat">+ Category</button>';
+      h += '</div>';
     } else {
       main.className = 'list';
-      S.history.forEach(function (x) { h += '<div class="done">' + esc(x) + '</div>'; });
+      S.history.forEach(function (x) { h += '<div class="done caps">' + esc(x) + '</div>'; });
     }
     main.innerHTML = h;
-    if (focusId) { var f = document.getElementById(focusId); if (f) f.focus(); }
+    var f = document.getElementById('field');
+    if (f) f.focus();
+  }
+
+  function commit() {
+    var f = document.getElementById('field');
+    if (!f || !editing) return false;
+    var text = f.value.trim();
+    if (!text) return false;
+    if (editing.kind === 'today') newTask(text, pickedCat, 'today');
+    else if (editing.kind === 'task') newTask(text, editing.cat, 'all');
+    else if (editing.kind === 'cat') {
+      var name = text.toUpperCase();
+      if (S.cats.indexOf(name) < 0) S.cats.push(name);
+      save();
+      editing = { kind: 'task', cat: name }; // go straight to adding its first task
+      return true;
+    }
+    save();
+    return true;
   }
 
   // Tabs
   document.querySelectorAll('[data-tab]').forEach(function (b) {
-    b.addEventListener('click', function () { S.tab = b.getAttribute('data-tab'); S.more = false; save(); render(); });
+    b.addEventListener('click', function () { editing = null; S.tab = b.getAttribute('data-tab'); save(); render(); });
   });
 
-  // Typing
-  main.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter') return;
-    var el = e.target;
-    if (el.id === 'addToday') {
-      if (add('today', el.value)) { S.more = false; save(); render(todays().length < 3 ? 'addToday' : null); }
-      else el.blur();
-    }
-    if (el.id === 'addAll') {
-      if (add('all', el.value)) { save(); render('addAll'); }
-      else el.blur();
-    }
+  // + buttons and category chips
+  main.addEventListener('pointerdown', function (e) {
+    // keep the keyboard open when tapping a category chip
+    if (e.target.closest('[data-chip]')) e.preventDefault();
+  });
+  main.addEventListener('mousedown', function (e) {
+    if (e.target.closest('[data-chip]')) e.preventDefault();
   });
   main.addEventListener('click', function (e) {
-    if (e.target.id === 'more') { S.more = true; save(); render('addToday'); }
+    var chip = e.target.closest('[data-chip]');
+    if (chip) {
+      var c = chip.getAttribute('data-chip');
+      pickedCat = pickedCat === c ? '' : c;
+      main.querySelectorAll('[data-chip]').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-chip') === pickedCat); });
+      var f = document.getElementById('field'); if (f) f.focus();
+      return;
+    }
+    var a = e.target.closest('[data-add]');
+    if (!a) return;
+    var kind = a.getAttribute('data-add');
+    if (kind === 'today') { editing = { kind: 'today' }; pickedCat = ''; }
+    if (kind === 'task') editing = { kind: 'task', cat: a.getAttribute('data-for') };
+    if (kind === 'cat') editing = { kind: 'cat' };
+    render();
   });
 
-  // Gestures on tasks
-  // Today: swipe right = cross out (+1) / undo (-1); swipe left = back to All.
-  // All: tap = move to Today; swipe left = delete.
+  // Return key saves; empty Return or tapping away closes
+  main.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.target.id !== 'field') return;
+    e.preventDefault();
+    if (commit()) {
+      if (editing.kind === 'today') { pickedCat = ''; if (todays().length >= 3) editing = null; }
+    } else editing = null;
+    render();
+  });
+  main.addEventListener('focusout', function (e) {
+    if (e.target.id !== 'field') return;
+    setTimeout(function () {
+      if (document.activeElement && document.activeElement.id === 'field') return;
+      commit();
+      editing = null; pickedCat = '';
+      render();
+      document.activeElement && document.activeElement.blur();
+    }, 250); // short wait so a tap on a category word keeps the field open
+  });
+
+  // Swipes on tasks
+  // Today: right = cross out (+1) / undo (-1); left = back to All
+  // All: tap = move to Today; left = delete. Left on an empty category name = delete category.
   var drag = null;
   main.addEventListener('pointerdown', function (e) {
-    var el = e.target.closest('.task');
-    if (!el) return;
-    drag = { el: el, id: el.getAttribute('data-id'), x: e.clientX, y: e.clientY, dx: 0, moved: false };
+    var el = e.target.closest('.task, .head');
+    if (!el || e.target.closest('button')) return;
+    drag = { el: el, id: el.getAttribute('data-id'), cat: el.getAttribute('data-cat'), x: e.clientX, y: e.clientY, dx: 0, moved: false };
   });
   window.addEventListener('pointermove', function (e) {
     if (!drag) return;
     drag.dx = e.clientX - drag.x;
     var dy = e.clientY - drag.y;
-    if (!drag.moved && Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(drag.dx)) { drag = null; return; }
+    if (!drag.moved && Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(drag.dx)) { reset(); return; }
     if (Math.abs(drag.dx) > 6) {
       drag.moved = true;
       drag.el.classList.add('dragging');
       drag.el.style.transform = 'translateX(' + (drag.dx * 0.6) + 'px)';
     }
   });
-  function endDrag() {
+  function reset() { if (drag) { drag.el.classList.remove('dragging'); drag.el.style.transform = ''; } drag = null; }
+  window.addEventListener('pointerup', function () {
     if (!drag) return;
-    var d = drag; drag = null;
-    d.el.classList.remove('dragging');
-    d.el.style.transform = '';
+    var d = drag; reset();
+    if (d.cat !== null && d.cat !== undefined && d.id === null) {
+      var empty = !S.tasks.some(function (t) { return t.cat === d.cat; });
+      if (d.dx < -70 && d.cat && empty) { S.cats = S.cats.filter(function (c) { return c !== d.cat; }); save(); render(); }
+      return;
+    }
     var t = find(d.id);
     if (!t) return;
     if (S.tab === 'today') {
-      if (d.dx > 50) {
-        t.done = !t.done;
-        S.points += t.done ? 1 : -1;
-        if (t.done) bump = true;
-        save(); render();
-      } else if (d.dx < -70 && !t.done) {
-        t.where = 'all'; save(); render();
-      }
+      if (d.dx > 50) { t.done = !t.done; S.points += t.done ? 1 : -1; if (t.done) bump = true; save(); render(); }
+      else if (d.dx < -70 && !t.done) { t.where = 'all'; save(); render(); }
     } else if (S.tab === 'all') {
       if (!d.moved) { t.where = 'today'; save(); render(); }
       else if (d.dx < -70) { S.tasks = S.tasks.filter(function (x) { return x !== t; }); save(); render(); }
     }
-  }
-  window.addEventListener('pointerup', endDrag);
-  window.addEventListener('pointercancel', function () {
-    if (drag) { drag.el.classList.remove('dragging'); drag.el.style.transform = ''; drag = null; }
   });
+  window.addEventListener('pointercancel', reset);
 
-  // Day change checks
-  function check() { if (rollover()) render(); }
+  function check() { if (!editing && rollover()) render(); }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
   setInterval(check, 60000);
 
