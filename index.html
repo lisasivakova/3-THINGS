@@ -61,6 +61,9 @@
   .head { display: flex; justify-content: space-between; align-items: baseline; text-transform: uppercase; }
   .plus { min-width: 44px; text-align: right; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-left: 32px; }
+  .today input { border-bottom: none; }
+  .task, .head { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .lifted { opacity: .35; }
   .pop { animation: pop .25s ease; }
   @keyframes pop { 45% { transform: scale(1.12); } }
 </style>
@@ -83,11 +86,12 @@
   var KEY = '3things.v1';
   var main = document.getElementById('main');
   var S;
-  var addingCat = false;   // the "New category" line is open
+  var addingCat = false;   // the "+ Category" line is open
   var more = false;        // an extra empty line on Today after 3
   var pickedCat = '';      // category chosen for the Today line being typed
-  var moving = null;       // task whose category picker is open in All
-  var lastTap = null;      // for double tap
+  var editId = null;       // task being edited
+  var editCat = null;      // category being renamed
+  var lastTap = null, tapTimer = null;
   var bump = false;
 
   function dayKey() { var d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
@@ -118,6 +122,7 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  function q(s) { return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
   function find(id) { for (var i = 0; i < S.tasks.length; i++) if (String(S.tasks[i].id) === String(id)) return S.tasks[i]; return null; }
   function todays() { return S.tasks.filter(function (t) { return t.where === 'today'; }); }
   function doneToday() {
@@ -127,8 +132,14 @@
   function newTask(text, cat, where) {
     S.tasks.push({ id: Date.now() + '' + Math.floor(Math.random() * 1000), text: text, cat: cat, where: where, done: false });
   }
-  function line(attrs) {
-    return '<input ' + attrs + ' type="text" autocapitalize="characters" autocomplete="off" spellcheck="true" enterkeyhint="done">';
+  function line(attrs, value) {
+    return '<input ' + attrs + (value ? ' value="' + esc(value) + '"' : '') +
+      ' type="text" autocapitalize="characters" autocomplete="off" spellcheck="true" enterkeyhint="done">';
+  }
+  function chips(cls, selected, attr) {
+    return '<div class="chips ' + cls + '">' + S.cats.map(function (c) {
+      return '<button class="' + (selected === c ? 'on' : '') + '" ' + attr + '="' + esc(c) + '">' + esc(c) + '</button>';
+    }).join('') + '</div>';
   }
 
   function render(focusSel) {
@@ -147,8 +158,13 @@
     if (S.tab === 'today') {
       main.className = 'today';
       today.forEach(function (t, i) {
-        h += '<div class="row"><span class="n">' + (i + 1) + '</span><span class="task' + (t.done ? ' done' : '') +
-             '" data-id="' + t.id + '">' + esc(t.text) + (t.cat ? ' / ' + esc(t.cat) : '') + '</span></div>';
+        h += '<div class="row"><span class="n">' + (i + 1) + '</span>';
+        if (editId === t.id) {
+          h += '<span class="grow">' + line('data-in="edit"', t.text) + '</span></div>';
+        } else {
+          h += '<span class="task' + (t.done ? ' done' : '') + '" data-id="' + t.id + '">' +
+               esc(t.text) + (t.cat ? ' / ' + esc(t.cat) : '') + '</span></div>';
+        }
       });
       var n = today.length;
       var slots = Math.max(3, n + (more ? 1 : 0));
@@ -163,24 +179,23 @@
       var cats = S.cats.slice();
       if (S.tasks.some(function (t) { return t.where === 'all' && !t.cat; })) cats.push('');
       cats.forEach(function (c) {
-        h += '<div class="group"><div class="head" data-cat="' + esc(c) + '"><span>' + (c ? esc(c) : 'Other') + ':</span></div>';
+        h += '<div class="group">';
+        if (c && editCat === c) h += line('data-in="editcat"', c);
+        else h += '<div class="head" data-cat="' + esc(c) + '"><span>' + (c ? esc(c) : 'Other') + ':</span></div>';
         S.tasks.forEach(function (t) {
           if (t.where !== 'all' || (t.cat || '') !== c) return;
-          h += '<div class="head"><span class="task" data-id="' + t.id + '">' + esc(t.text) + '</span>' +
-               '<button class="plus" data-today="' + t.id + '" aria-label="Move to Today">+</button></div>';
-          if (moving === t.id) {
-            h += '<div class="chips">';
-            S.cats.forEach(function (c2) {
-              h += '<button class="' + (c2 === (t.cat || '') ? 'on' : '') + '" data-move="' + esc(c2) + '">' + esc(c2) + '</button>';
-            });
-            h += '</div>';
+          if (editId === t.id) {
+            h += line('data-in="edit"', t.text);
+          } else {
+            h += '<div class="head"><span class="task" data-id="' + t.id + '">' + esc(t.text) + '</span>' +
+                 '<button class="plus" data-today="' + t.id + '" aria-label="Move to Today">+</button></div>';
           }
         });
         if (c) h += line('data-in="task" data-for="' + esc(c) + '"');
         h += '</div>';
       });
       if (addingCat) h += '<div class="group">' + line('data-in="cat"') + '</div>';
-      else h += '<button id="newcat">New category</button>';
+      else h += '<button id="newcat">+ Category</button>';
       h += '</div>';
     } else {
       main.className = 'list';
@@ -188,14 +203,37 @@
       S.history.forEach(function (x) { h += '<div class="done caps">' + esc(x) + '</div>'; });
     }
     main.innerHTML = h;
-    if (focusSel) { var f = main.querySelector(focusSel); if (f) f.focus(); }
+    if (drag && drag.lifted) {
+      var me = main.querySelector('[data-id="' + q(drag.id || '') + '"]') || (drag.cat ? main.querySelector('.head[data-cat="' + q(drag.cat) + '"]') : null);
+      if (me) { me.classList.add('lifted'); drag.el = me; }
+    }
+    if (focusSel) {
+      var f = main.querySelector(focusSel);
+      if (f) { f.focus(); var L = f.value.length; try { f.setSelectionRange(L, L); } catch (e) {} }
+    }
   }
 
   // Save what's typed in a line. Returns the selector to keep typing in, or null.
   function commit(el) {
     var text = el.value.trim();
-    el.value = '';
     var kind = el.getAttribute('data-in');
+    el.value = '';
+    if (kind === 'edit') {
+      var t = find(editId);
+      editId = null;
+      if (t) { if (text) t.text = text; else S.tasks = S.tasks.filter(function (x) { return x !== t; }); save(); }
+      return null;
+    }
+    if (kind === 'editcat') {
+      var old = editCat; editCat = null;
+      var nn = text.toUpperCase();
+      if (nn && nn !== old && S.cats.indexOf(nn) < 0) {
+        S.cats = S.cats.map(function (c) { return c === old ? nn : c; });
+        S.tasks.forEach(function (x) { if (x.cat === old) x.cat = nn; });
+        save();
+      }
+      return null;
+    }
     if (!text) { if (kind === 'cat') addingCat = false; return null; }
     if (kind === 'today') {
       newTask(text, pickedCat, 'today'); pickedCat = ''; more = false; save();
@@ -204,62 +242,58 @@
     if (kind === 'task') {
       var c = el.getAttribute('data-for');
       newTask(text, c, 'all'); save();
-      return '[data-in="task"][data-for="' + c.replace(/"/g, '\\"') + '"]';
+      return '[data-in="task"][data-for="' + q(c) + '"]';
     }
     if (kind === 'cat') {
       var name = text.toUpperCase();
       if (S.cats.indexOf(name) < 0) S.cats.push(name);
       addingCat = false; save();
-      return '[data-in="task"][data-for="' + name.replace(/"/g, '\\"') + '"]';
+      return '[data-in="task"][data-for="' + q(name) + '"]';
     }
     return null;
   }
 
+  function closeAll() { addingCat = false; more = false; pickedCat = ''; editId = null; editCat = null; }
+
   // Tabs
   document.querySelectorAll('[data-tab]').forEach(function (b) {
-    b.addEventListener('click', function () {
-      addingCat = false; moving = null; more = false; pickedCat = '';
-      S.tab = b.getAttribute('data-tab'); save(); render();
-    });
+    b.addEventListener('click', function () { closeAll(); S.tab = b.getAttribute('data-tab'); save(); render(); });
   });
 
-  // Return key saves; empty Return closes the keyboard
+  // Return key saves
   main.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' || !e.target.hasAttribute('data-in')) return;
     e.preventDefault();
-    var next = commit(e.target);
-    render(next);
+    render(commit(e.target));
   });
 
   // Category words under the Today line being typed
-  var activeToday = null;
+  var activeInput = null;
   function removeChips() { var c = main.querySelector('.todaychips'); if (c) c.remove(); }
   main.addEventListener('focusin', function (e) {
     var el = e.target;
+    if (!el.hasAttribute || !el.hasAttribute('data-in')) return;
+    activeInput = el;
     if (el.getAttribute('data-in') !== 'today') return;
-    activeToday = el;
     removeChips();
     if (!S.cats.length) return;
     var d = document.createElement('div');
-    d.className = 'chips todaychips';
-    d.innerHTML = S.cats.map(function (c) {
-      return '<button class="' + (pickedCat === c ? 'on' : '') + '" data-chip="' + esc(c) + '">' + esc(c) + '</button>';
-    }).join('');
-    el.closest('.row').after(d);
+    d.innerHTML = chips('todaychips', pickedCat, 'data-chip');
+    el.closest('.row').after(d.firstChild);
   });
   main.addEventListener('focusout', function (e) {
     var el = e.target;
     if (!el.hasAttribute || !el.hasAttribute('data-in')) return;
     setTimeout(function () {
-      if (document.activeElement === el) return;        // came back (tapped a category word)
-      if (!document.body.contains(el)) return;           // already re-rendered
-      var typed = el.value.trim();
-      if (typed) { commit(el); render(); return; }
-      if (el.getAttribute('data-in') === 'cat') { addingCat = false; render(); return; }
-      if (el.getAttribute('data-in') === 'today') { pickedCat = ''; removeChips(); }
+      if (document.activeElement === el) return;   // came back (tapped a category word)
+      if (!document.body.contains(el)) return;      // already re-rendered
+      var kind = el.getAttribute('data-in');
+      if (el.value.trim() || kind === 'edit' || kind === 'editcat') { commit(el); render(); return; }
+      if (kind === 'cat') { addingCat = false; render(); return; }
+      if (kind === 'today') { pickedCat = ''; removeChips(); }
     }, 250);
   });
-  function stopBlur(e) { if (e.target.closest('[data-chip]')) e.preventDefault(); }
+  function stopBlur(e) { if (e.target.closest('[data-chip], [data-recat]')) e.preventDefault(); }
   main.addEventListener('mousedown', stopBlur);
   main.addEventListener('pointerdown', stopBlur);
 
@@ -270,37 +304,55 @@
       var c = chip.getAttribute('data-chip');
       pickedCat = pickedCat === c ? '' : c;
       main.querySelectorAll('[data-chip]').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-chip') === pickedCat); });
-      if (activeToday) activeToday.focus();
+      if (activeInput) activeInput.focus();
+      return;
+    }
+    var rc = e.target.closest('[data-recat]');
+    if (rc) {
+      var t = find(editId);
+      if (t) {
+        var nc = rc.getAttribute('data-recat');
+        t.cat = t.cat === nc && t.where === 'today' ? '' : nc;
+        var f = main.querySelector('[data-in="edit"]');
+        if (f && f.value.trim()) t.text = f.value.trim();
+        save();
+      }
+      editId = null; render();
       return;
     }
     var td = e.target.closest('[data-today]');
     if (td) {
       var tk = find(td.getAttribute('data-today'));
-      if (tk) { tk.where = 'today'; moving = null; save(); render(); }
-      return;
-    }
-    var mv = e.target.closest('[data-move]');
-    if (mv) {
-      var tm = find(moving);
-      if (tm) { tm.cat = mv.getAttribute('data-move'); save(); }
-      moving = null; render();
+      if (tk) { tk.where = 'today'; save(); render(); }
       return;
     }
     if (e.target.id === 'more') { more = true; render('[data-in="today"]'); return; }
-    if (e.target.id === 'newcat') { addingCat = true; moving = null; render('[data-in="cat"]'); return; }
+    if (e.target.id === 'newcat') { addingCat = true; render('[data-in="cat"]'); return; }
   });
 
-  // Gestures on task names
-  // Today: double tap or swipe right = cross out (+1) / undo (-1); swipe left = back to All
-  // All: tap = change category; swipe left = delete. Swipe left on an empty category name = delete it.
+  // Gestures
+  // Tap = edit (task or category name). Today: double tap or swipe right = cross out (+1) / undo (-1);
+  // swipe left = back to All. All: swipe left = delete task (or an empty category).
+  // Long press, then drag = move it (between categories too).
   var drag = null;
   main.addEventListener('pointerdown', function (e) {
-    var el = e.target.closest('.task, .head');
+    var el = e.target.closest('.task, .head[data-cat]');
     if (!el || e.target.closest('button, input')) return;
-    drag = { el: el, id: el.getAttribute('data-id'), cat: el.getAttribute('data-cat'), x: e.clientX, y: e.clientY, dx: 0, moved: false };
+    drag = { el: el, id: el.getAttribute('data-id'), cat: el.getAttribute('data-cat'), x: e.clientX, y: e.clientY, dx: 0, moved: false, lifted: false };
+    var d = drag;
+    d.timer = setTimeout(function () {
+      if (drag !== d || d.moved) return;
+      d.lifted = true;
+      d.el.classList.add('lifted');
+      if (navigator.vibrate) navigator.vibrate(10);
+    }, 450);
   });
+  // While moving something, stop the page from scrolling
+  document.addEventListener('touchmove', function (e) { if (drag && drag.lifted) e.preventDefault(); }, { passive: false });
+
   window.addEventListener('pointermove', function (e) {
     if (!drag) return;
+    if (drag.lifted) { dropOver(e.clientX, e.clientY); return; }
     drag.dx = e.clientX - drag.x;
     var dy = e.clientY - drag.y;
     if (!drag.moved && Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(drag.dx)) { reset(); return; }
@@ -310,11 +362,55 @@
       drag.el.style.transform = 'translateX(' + (drag.dx * 0.6) + 'px)';
     }
   });
-  function reset() { if (drag) { drag.el.classList.remove('dragging'); drag.el.style.transform = ''; } drag = null; }
+
+  function dropOver(x, y) {
+    var under = document.elementFromPoint(x, y);
+    if (!under || !main.contains(under)) return;
+    var tgtTask = under.closest('[data-id]');
+    var tgtCat = under.closest('.head[data-cat]');
+    if (drag.id) {
+      var me = find(drag.id);
+      if (!me) return;
+      if (tgtTask) {
+        var other = find(tgtTask.getAttribute('data-id'));
+        if (!other || other === me || other.where !== me.where) return;
+        var from = S.tasks.indexOf(me), to = S.tasks.indexOf(other);
+        S.tasks.splice(from, 1);
+        S.tasks.splice(to, 0, me);
+        if (me.where === 'all') me.cat = other.cat;
+        render();
+      } else if (tgtCat && me.where === 'all') {
+        var c = tgtCat.getAttribute('data-cat');
+        if ((me.cat || '') === c) return;
+        S.tasks.splice(S.tasks.indexOf(me), 1);
+        var first = -1;
+        S.tasks.forEach(function (t, i) { if (first < 0 && t.where === 'all' && (t.cat || '') === c) first = i; });
+        if (first < 0) S.tasks.push(me); else S.tasks.splice(first, 0, me);
+        me.cat = c;
+        render();
+      }
+    } else if (drag.cat && tgtCat) {
+      var c2 = tgtCat.getAttribute('data-cat');
+      if (!c2 || c2 === drag.cat) return;
+      var a = S.cats.indexOf(drag.cat), b = S.cats.indexOf(c2);
+      S.cats.splice(a, 1);
+      S.cats.splice(b, 0, drag.cat);
+      render();
+    }
+  }
+
+  function reset() {
+    if (drag) { clearTimeout(drag.timer); if (drag.el) { drag.el.classList.remove('dragging', 'lifted'); drag.el.style.transform = ''; } }
+    drag = null;
+  }
+
   window.addEventListener('pointerup', function () {
     if (!drag) return;
     var d = drag; reset();
-    if (d.id === null) {
+    if (d.lifted) { save(); render(); return; }
+
+    if (d.id === null) { // category name
+      if (!d.moved && d.cat) { editCat = d.cat; render('[data-in="editcat"]'); return; }
       if (d.cat && d.dx < -70 && !S.tasks.some(function (t) { return t.cat === d.cat; })) {
         S.cats = S.cats.filter(function (c) { return c !== d.cat; }); save(); render();
       }
@@ -323,29 +419,38 @@
     var t = find(d.id);
     if (!t) return;
     if (S.tab === 'today') {
-      var cross = d.dx > 50;
       if (!d.moved) {
         var now = Date.now();
-        if (lastTap && lastTap.id === d.id && now - lastTap.time < 350) { cross = true; lastTap = null; }
-        else lastTap = { id: d.id, time: now };
+        if (lastTap && lastTap.id === d.id && now - lastTap.time < 350) {
+          clearTimeout(tapTimer); lastTap = null; cross(t);
+        } else {
+          lastTap = { id: d.id, time: now };
+          clearTimeout(tapTimer);
+          tapTimer = setTimeout(function () { lastTap = null; editId = t.id; render('[data-in="edit"]'); }, 320);
+        }
+        return;
       }
-      if (cross) {
-        t.done = !t.done;
-        t.doneAt = t.done ? Date.now() : 0;
-        S.points += t.done ? 1 : -1;
-        if (t.done) bump = true;
-        save(); render();
-      } else if (d.dx < -70 && !t.done) { t.where = 'all'; save(); render(); }
+      if (d.dx > 50) cross(t);
+      else if (d.dx < -70 && !t.done) { t.where = 'all'; save(); render(); }
     } else if (S.tab === 'all') {
-      if (!d.moved) { moving = moving === t.id ? null : t.id; render(); }
-      else if (d.dx < -70) { S.tasks = S.tasks.filter(function (x) { return x !== t; }); moving = null; save(); render(); }
+      if (!d.moved) { editId = t.id; render('[data-in="edit"]'); }
+      else if (d.dx < -70) { S.tasks = S.tasks.filter(function (x) { return x !== t; }); save(); render(); }
     }
   });
-  window.addEventListener('pointercancel', reset);
+  window.addEventListener('pointercancel', function () { if (drag && drag.lifted) { save(); reset(); render(); } else reset(); });
+
+  function cross(t) {
+    t.done = !t.done;
+    t.doneAt = t.done ? Date.now() : 0;
+    S.points += t.done ? 1 : -1;
+    if (t.done) bump = true;
+    save(); render();
+  }
 
   function check() {
-    var typing = document.activeElement && document.activeElement.hasAttribute && document.activeElement.hasAttribute('data-in');
-    if (!typing && rollover()) render();
+    var a = document.activeElement;
+    var typing = a && a.hasAttribute && a.hasAttribute('data-in');
+    if (!typing && !drag && rollover()) render();
   }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
   setInterval(check, 60000);
