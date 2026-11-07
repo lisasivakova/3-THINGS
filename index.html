@@ -12,6 +12,7 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" type="image/png" href="icon-512.png">
 <link rel="manifest" href="manifest.json">
+<script>if (location.search.indexOf('sticky') >= 0) document.documentElement.className += ' sticky';</script>
 <style>
   /* Put your licensed Neue Haas Grotesk Display 65 Medium next to this page
      under this exact name and it is used automatically. */
@@ -64,6 +65,14 @@
   .chips { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-left: 32px; }
   .task, .head { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   .lifted { opacity: .35; }
+  #token { text-transform: none; border-bottom-color: var(--ink); }
+  /* Mac sticky window: compact */
+  .sticky body { font-size: 18px; }
+  .sticky .app { height: 100vh; max-width: none; padding: 12px 16px 14px; }
+  .sticky main.today { gap: 16px; }
+  .sticky main.list { padding: 22px 0; gap: 14px; }
+  .sticky .groups { gap: 24px; }
+  .sticky .group { gap: 10px; }
   .pop { animation: pop .25s ease; }
   @keyframes pop { 45% { transform: scale(1.12); } }
 </style>
@@ -76,7 +85,7 @@
   </div>
   <main id="main"></main>
   <div class="bar">
-    <div id="points">0</div>
+    <button id="points" aria-label="Points and sync">0</button>
     <button data-tab="done" id="tabDone">Done</button>
   </div>
 </div>
@@ -103,7 +112,81 @@
       S.tasks.forEach(function (t) { if (t.cat && S.cats.indexOf(t.cat) < 0) S.cats.push(t.cat); });
     }
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  function writeLocal() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  // Every real change: stamp it, keep it, and send it to the other devices.
+  function save() { S.updatedAt = Date.now(); writeLocal(); schedulePush(); }
+
+  // ---- Sync through a private GitHub Gist ----
+  var SYNC_KEY = '3things.sync';
+  var GIST_DESC = '3things data';
+  var GIST_FILE = '3things.json';
+  var sync = {};
+  try { sync = JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch (e) { sync = {}; }
+  var syncStatus = sync.gistId ? 'Synced' : '';
+  var pushTimer = null;
+  function saveSync() { try { localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); } catch (e) {} }
+  function payload() {
+    return JSON.stringify({ tasks: S.tasks, cats: S.cats, history: S.history, points: S.points, day: S.day, updatedAt: S.updatedAt || 0 });
+  }
+  function gh(method, path, body, keepalive) {
+    return fetch('https://api.github.com' + path, {
+      method: method, cache: 'no-store', keepalive: !!keepalive,
+      headers: { 'Authorization': 'Bearer ' + sync.token, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined
+    }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+  }
+  function setStatus(t) { syncStatus = t; if (S.tab === 'sync') render(); }
+  function stamp() { var d = new Date(); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+  function schedulePush() {
+    if (!sync.gistId) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(function () { pushTimer = null; push(); }, 1200);
+  }
+  function push(keepalive) {
+    if (!sync.gistId) return Promise.resolve();
+    var files = {}; files[GIST_FILE] = { content: payload() };
+    return gh('PATCH', '/gists/' + sync.gistId, { files: files }, keepalive)
+      .then(function () { setStatus('Synced ' + stamp()); })
+      .catch(function () { setStatus('Not synced'); });
+  }
+  function busy() {
+    var a = document.activeElement;
+    return !!(drag || editId || editCat || (a && a.hasAttribute && a.hasAttribute('data-in')));
+  }
+  // Take the other device's data if it is newer; send ours if ours is newer.
+  function pull() {
+    if (!sync.gistId || pushTimer) return Promise.resolve();
+    return gh('GET', '/gists/' + sync.gistId).then(function (g) {
+      var f = g.files && g.files[GIST_FILE];
+      var remote = f && f.content ? JSON.parse(f.content) : null;
+      var mine = S.updatedAt || 0;
+      if (remote && (remote.updatedAt || 0) > mine) {
+        if (busy()) return;
+        var tab = S.tab;
+        S = remote; S.tab = tab;
+        if (!S.cats) S.cats = [];
+        writeLocal(); rollover(); render();
+      } else if (!remote || (remote.updatedAt || 0) < mine) {
+        return push();
+      }
+      setStatus('Synced ' + stamp());
+    }).catch(function (e) {
+      if (String(e.message) === '404') { sync.gistId = null; saveSync(); }
+      setStatus('Not synced');
+    });
+  }
+  function connect(token) {
+    sync = { token: token.trim() };
+    setStatus('Connecting');
+    gh('GET', '/gists?per_page=100').then(function (list) {
+      var found = list.filter(function (g) { return g.description === GIST_DESC && g.files && g.files[GIST_FILE]; })[0];
+      if (found) { sync.gistId = found.id; saveSync(); return pull(); }
+      var files = {}; files[GIST_FILE] = { content: payload() };
+      return gh('POST', '/gists', { description: GIST_DESC, public: false, files: files }).then(function (g) {
+        sync.gistId = g.id; saveSync(); setStatus('Synced ' + stamp());
+      });
+    }).catch(function () { sync = {}; saveSync(); setStatus('Wrong token'); });
+  }
 
   // End of day: finished -> Done for good, unfinished -> back to All.
   function rollover() {
@@ -113,7 +196,7 @@
       .map(function (t) { if (t.where === 'today') { t.where = 'all'; t.done = false; } return t; });
     S.day = dayKey();
     more = false;
-    save();
+    writeLocal();
     return true;
   }
 
@@ -197,6 +280,15 @@
       if (addingCat) h += '<div class="group">' + line('data-in="cat"') + '</div>';
       else h += '<button id="newcat">+ Category</button>';
       h += '</div>';
+    } else if (S.tab === 'sync') {
+      main.className = 'list';
+      h += '<div class="caps">Sync</div>';
+      if (sync.gistId) {
+        h += '<div class="caps">' + esc(syncStatus || 'Synced') + '</div><button id="disconnect">Disconnect</button>';
+      } else {
+        h += '<input id="token" type="text" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="GitHub token" enterkeyhint="done">';
+        if (syncStatus) h += '<div class="caps">' + esc(syncStatus) + '</div>';
+      }
     } else {
       main.className = 'list';
       doneToday().forEach(function (t) { h += '<div class="done caps">' + esc(t.text) + '</div>'; });
@@ -263,11 +355,12 @@
 
   // Tabs
   document.querySelectorAll('[data-tab]').forEach(function (b) {
-    b.addEventListener('click', function () { closeAll(); S.tab = b.getAttribute('data-tab'); save(); render(); });
+    b.addEventListener('click', function () { closeAll(); S.tab = b.getAttribute('data-tab'); writeLocal(); render(); });
   });
 
   // Return key saves
   main.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && e.target.id === 'token') { e.preventDefault(); if (e.target.value.trim()) connect(e.target.value); return; }
     if (e.key !== 'Enter' || !e.target.hasAttribute('data-in')) return;
     e.preventDefault();
     render(commit(e.target));
@@ -324,6 +417,7 @@
       if (tk) { tk.where = 'today'; save(); render(); }
       return;
     }
+    if (e.target.id === 'disconnect') { clearTimeout(pushTimer); pushTimer = null; sync = {}; saveSync(); syncStatus = ''; render(); return; }
     if (e.target.id === 'more') { more = true; render('[data-in="today"]'); return; }
     if (e.target.id === 'newcat') { addingCat = true; render('[data-in="cat"]'); return; }
   });
@@ -445,17 +539,24 @@
     save(); render();
   }
 
+  document.getElementById('points').addEventListener('click', function () {
+    closeAll(); S.tab = 'sync'; writeLocal(); render();
+  });
+
   function check() {
-    var a = document.activeElement;
-    var typing = a && a.hasAttribute && a.hasAttribute('data-in');
-    if (!typing && !drag && rollover()) render();
+    var p = sync.gistId ? pull() : Promise.resolve();
+    p.then(function () { if (!busy() && rollover()) render(); });
   }
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
-  setInterval(check, 60000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; push(true); } }
+    else check();
+  });
+  setInterval(check, 30000);
 
   load();
-  rollover();
+  if (S.tab === 'sync') S.tab = 'today';
   render();
+  check();
 })();
 </script>
 </body>
