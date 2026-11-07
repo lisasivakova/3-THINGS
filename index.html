@@ -38,8 +38,9 @@
   input {
     font: inherit; color: inherit; background: none; border: none; outline: none; padding: 0;
     width: 100%; border-radius: 0; caret-color: var(--ink);
-    border-bottom: 2px solid var(--ink);
+    border-bottom: 2px solid transparent;
   }
+  input:focus { border-bottom-color: var(--ink); }
   .app {
     height: 100dvh; max-width: 480px; margin: 0 auto;
     display: flex; flex-direction: column;
@@ -61,7 +62,6 @@
   .head { display: flex; justify-content: space-between; align-items: baseline; text-transform: uppercase; }
   .plus { min-width: 44px; text-align: right; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-left: 32px; }
-  .today input { border-bottom: none; }
   .task, .head { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   .lifted { opacity: .35; }
   .pop { animation: pop .25s ease; }
@@ -227,7 +227,13 @@
     if (kind === 'editcat') {
       var old = editCat; editCat = null;
       var nn = text.toUpperCase();
-      if (nn && nn !== old && S.cats.indexOf(nn) < 0) {
+      if (!nn) {
+        // name erased: the category and its tasks in All go away
+        S.cats = S.cats.filter(function (c) { return c !== old; });
+        S.tasks = S.tasks.filter(function (x) { return !(x.where === 'all' && x.cat === old); });
+        S.tasks.forEach(function (x) { if (x.cat === old) x.cat = ''; });
+        save();
+      } else if (nn !== old && S.cats.indexOf(nn) < 0) {
         S.cats = S.cats.map(function (c) { return c === old ? nn : c; });
         S.tasks.forEach(function (x) { if (x.cat === old) x.cat = nn; });
         save();
@@ -272,14 +278,7 @@
   function removeChips() { var c = main.querySelector('.todaychips'); if (c) c.remove(); }
   main.addEventListener('focusin', function (e) {
     var el = e.target;
-    if (!el.hasAttribute || !el.hasAttribute('data-in')) return;
-    activeInput = el;
-    if (el.getAttribute('data-in') !== 'today') return;
-    removeChips();
-    if (!S.cats.length) return;
-    var d = document.createElement('div');
-    d.innerHTML = chips('todaychips', pickedCat, 'data-chip');
-    el.closest('.row').after(d.firstChild);
+    if (el.hasAttribute && el.hasAttribute('data-in')) activeInput = el;
   });
   main.addEventListener('focusout', function (e) {
     var el = e.target;
@@ -290,7 +289,6 @@
       var kind = el.getAttribute('data-in');
       if (el.value.trim() || kind === 'edit' || kind === 'editcat') { commit(el); render(); return; }
       if (kind === 'cat') { addingCat = false; render(); return; }
-      if (kind === 'today') { pickedCat = ''; removeChips(); }
     }, 250);
   });
   function stopBlur(e) { if (e.target.closest('[data-chip], [data-recat]')) e.preventDefault(); }
